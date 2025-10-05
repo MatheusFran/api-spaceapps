@@ -1,8 +1,9 @@
 import os
 import re
 import streamlit as st
+import pandas as pd
 
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
 st.set_page_config(
