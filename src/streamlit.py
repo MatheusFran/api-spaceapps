@@ -1,7 +1,6 @@
 import os
 import re
 import streamlit as st
-import pandas as pd
 
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -15,82 +14,145 @@ st.set_page_config(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VECTORSTORE_PATH = os.path.join(BASE_DIR, "../pipeline-transform/vectorstore")
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vectorstore = FAISS.load_local(
-    VECTORSTORE_PATH,
-    embeddings,
-    allow_dangerous_deserialization=True
-)
-retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
-def extract_relevant_snippets(doc_content: str, query: str, max_snippets: int = 5) -> str:
-    """
-    Divide o texto em sentenças e retorna as mais relevantes
-    de acordo com a query.
-    """
-    sentences = re.split(r'(?<=[.!?]) +', doc_content)
+# Configure embeddings with proper device and model kwargs
+@st.cache_resource
+def load_embeddings():
+    model_kwargs = {'device': 'cpu'}
+    encode_kwargs = {'normalize_embeddings': True}
+
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs=model_kwargs,
+        encode_kwargs=encode_kwargs
+    )
+    return embeddings
+
+
+@st.cache_resource
+def load_vectorstore():
+    embeddings = load_embeddings()
+    vectorstore = FAISS.load_local(
+        VECTORSTORE_PATH,
+        embeddings,
+        allow_dangerous_deserialization=True
+    )
+    return vectorstore
+
+
+vectorstore = load_vectorstore()
+retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
+
+
+def extract_relevant_snippet(doc_content: str, query: str, max_chars: int = 400) -> str:
+    sentences = re.split(r'(?<=[.!?])\s+', doc_content)
     query_words = set(query.lower().split())
-    relevant_sentences = []
 
+    scored_sentences = []
     for sentence in sentences:
         sentence_words = set(sentence.lower().split())
-        if query_words & sentence_words:  # interseção > 0
-            relevant_sentences.append(sentence)
-        if len(relevant_sentences) >= max_snippets:
+        overlap = len(query_words & sentence_words)
+        if overlap > 0:
+            scored_sentences.append((sentence, overlap))
+
+    scored_sentences.sort(key=lambda x: x[1], reverse=True)
+
+    if not scored_sentences:
+        return doc_content[:max_chars] + ("..." if len(doc_content) > max_chars else "")
+
+    snippet = ""
+    for sentence, score in scored_sentences[:3]:
+        if len(snippet) + len(sentence) < max_chars:
+            snippet += sentence + " "
+        else:
             break
 
-    if not relevant_sentences:
-        return doc_content[:500] + ("..." if len(doc_content) > 500 else "")
-
-    return " ".join(relevant_sentences)
+    return snippet.strip() or doc_content[:max_chars] + ("..." if len(doc_content) > max_chars else "")
 
 
 def search_documents(query: str):
     results = retriever.get_relevant_documents(query)
     docs = []
-    for doc in results[:5]:
-        snippet = extract_relevant_snippets(doc.page_content, query)
-        link = doc.metadata.get("source") or doc.metadata.get("url") or "Link não disponível"
+    seen_links = set()
+
+    for doc in results:
+        link = doc.metadata.get("source") or doc.metadata.get("url") or "Link not available"
+
+
+        if link in seen_links:
+            continue
+
+        seen_links.add(link)
+
+
+        title = doc.metadata.get("title")
+        if not title:
+            filename = os.path.basename(link) if link != "Link not available" else "Document"
+            title = os.path.splitext(filename)[0].replace('_', ' ').replace('-', ' ')
+
+
+        snippet = extract_relevant_snippet(doc.page_content, query)
+
         docs.append({
-            "title": os.path.basename(link) if link != "Link não disponível" else "Documento",
+            "title": title,
             "link": link,
             "snippet": snippet
         })
+
+
+        if len(docs) >= 5:
+            break
+
     return docs
 
-st.title("SpaceLifeTeam: Encontre os artigos mais relevantes para sua pesquisa")
-st.markdown("Digite sua hipotese ou interesse, que encontraremos dentro da nossa base de dados os artigos mais relevantes, otimizando seu tempo")
+
+st.title("Find the Most Relevant Articles for Your Research")
+st.markdown("""
+**Discover scientific articles efficiently using AI-powered search**
+
+Our advanced retrieval system uses FAISS vector embeddings to find the most relevant space research 
+articles from our comprehensive database. Simply enter your hypothesis or research interest, and we'll 
+help you discover relevant scientific literature, saving you valuable time.
+
+Perfect for researchers, students, and space enthusiasts exploring topics like Mars colonization, 
+astrobiology, space habitats, and extraterrestrial life.
+""")
 
 with st.sidebar:
-    st.header("1. Consulta")
+    st.header("🔍 Search Query")
     document_input = st.text_area(
-        "Digite sua busca",
+        "Enter your search query",
         height=200,
-        placeholder="Ex: 'colonização de Marte 🚀'.",
+        placeholder="Example: 'microbial life in space'",
     )
-    analyze_button = st.button("🔍 Buscar Documentos", type="primary")
+    analyze_button = st.button("🚀 Search Documents", type="primary")
 
-    st.markdown("---")
-    st.info("Este app usa FAISS + Embeddings para recuperar documentos locais.")
+    st.markdown("### About")
+    st.markdown("""
+    **SpaceLifeTeam** is dedicated to advancing space research by making scientific literature 
+    more accessible through AI-powered search technology.
+    """)
 
 if analyze_button and document_input:
-    with st.spinner("Buscando documentos..."):
+    with st.spinner("Searching documents..."):
         documents_data = search_documents(document_input)
 
     if documents_data:
-        st.success("Busca concluída!")
+        st.success(f"Search completed successfully! Found {len(documents_data)} unique documents.")
 
         st.markdown("---")
+        st.markdown("### 📚 Search Results")
         for i, doc in enumerate(documents_data):
-            st.subheader(f"📄 Documento {i+1}: {doc['title']}")
-            st.markdown(f"**Resumo:** {doc['snippet']}")
-            st.link_button("Acessar Documento", url=doc['link'], type="secondary")
+            st.subheader(f"📄 {doc['title']}")
+            st.markdown(f"**Relevant Excerpt:**")
+            st.markdown(f"> {doc['snippet']}")
+            st.link_button("Access Document", url=doc['link'], type="secondary")
             st.markdown("---")
     else:
-        st.info("Nenhum documento encontrado.")
+        st.info("No documents found. Try adjusting your search query.")
 
 elif analyze_button and not document_input:
-    st.error("Por favor, insira uma consulta antes de buscar.")
+    st.error("Please enter a search query before searching.")
 
 else:
-    st.info("Digite uma consulta para começar.")
+    st.info("💡 Enter a search query to begin exploring our space research database.")

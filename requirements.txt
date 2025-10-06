@@ -3,8 +3,8 @@ pydantic~=2.11.10
 langchain~=0.3.27
 langgraph~=0.6.8
 langchain-community
-langchain-huggingface
 faiss-cpu
 transformers>=4.30.0
 torch>=2.1.0
 sentence-transformers>=2.2.2
+langchain_huggingface
